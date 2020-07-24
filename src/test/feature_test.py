@@ -32,7 +32,8 @@ def test_file_based_convert_examples_to_features():
 
 def test_file_based_input_fn_builder():
 
-    tf_path = os.path.join('./dat/', 'train.tfrecord')
+    tf_path = [str(os.path.join('./dat/', 'train_0.tfrecord')),
+                        str(os.path.join('./dat/', 'train_112499.tfrecord'))]
     input_fn = file_based_input_fn_builder(input_file=tf_path, is_training=False, drop_remainder=False)
     params = dict()
     params["train_batch_size"] = 2

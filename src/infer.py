@@ -1,8 +1,12 @@
 import tensorflow as tf
 import linecache
+import os
 
 import tokenization
+from flag_center import FLAGS,flags
 from model import PolyEncoderConfig, PolyEncoder
+
+flags.DEFINE_integer(name='recall_k', default=3, help='k值')
 
 
 def load_eval_samples(file_name):
@@ -19,15 +23,15 @@ def load_eval_samples(file_name):
     return samples
 
 
-def convert_samples_to_features(samples):
+def convert_samples_to_features(samples, vocab_file, context_length, candidate_length):
 
-    tokenizer = tokenization.FullTokenizer(vocab_file='./ckpt/albert/vocab.txt', do_lower_case=True)
+    tokenizer = tokenization.FullTokenizer(vocab_file=vocab_file, do_lower_case=True)
     cls_id = tokenizer.vocab['[CLS]']
     sep_id = tokenizer.vocab['[SEP]']
     features = list()
     for context, response_list in samples:
-        c_tokens = [[cls_id] + tokenizer.tokenize(text=context)[-312:] + [sep_id] for _ in response_list]
-        rl_tokens = [[cls_id] + tokenizer.tokenize(ele)[:162] + [sep_id] for ele in response_list]
+        c_tokens = [[cls_id] + tokenizer.tokenize(text=context)[-context_length:] + [sep_id] for _ in response_list]
+        rl_tokens = [[cls_id] + tokenizer.tokenize(ele)[:candidate_length] + [sep_id] for ele in response_list]
         features.append([c_tokens, rl_tokens])
     return features
 
@@ -45,24 +49,38 @@ def crerate_model(model_config_file, k):
     return idx, x_context_tensor, x_response_tensor
 
 
-if __name__ == '''__main__''':
+def main(unused):
 
-    k = 5
-    idx, x_context_tensor, x_response_tensor = crerate_model(model_config_file="./cfg/poly_encoder.json", k=k)
-    samples = load_eval_samples(file_name="./dat/ubuntu/test.txt")
-    features = convert_samples_to_features(samples=samples)
+    k = FLAGS.recall_k
+    model_config_file = FLAGS.model_config
+    data_dir = os.path.join(FLAGS.data_dir, 'test.txt')
+    vocab_file = FLAGS.vocab_file
+    context_length = FLAGS.context_length
+    candidate_length = FLAGS.candidate_length
+    idx, x_context_tensor, x_response_tensor = crerate_model(model_config_file=model_config_file, k=k)
+    samples = load_eval_samples(file_name=data_dir)
+    features = convert_samples_to_features(samples=samples, vocab_file=vocab_file,
+                                           context_length=context_length, candidate_length=candidate_length)
     sess = tf.Session()
-    sess.run(tf.global_variables_initializer)
+    saver = tf.train.Saver()
+    model_file = tf.train.latest_checkpoint(FLAGS.model_dir)
+    saver.restore(sess=sess, save_path=model_file)
     hit_num = 0
     for feature in features:
         # batch_size x 5
-        recall_5_in_10 = sess.run(fetches=idx, feed_dict={
+        recall_k_in_10 = sess.run(fetches=idx, feed_dict={
             x_context_tensor: feature[0],
             x_response_tensor: feature[1]
         })
-        for ele in recall_5_in_10:
+        for ele in recall_k_in_10:
             if 1 in ele:
                 hit_num += 1
     print("Result-------------------------------------------------------")
     print("recall@%d/10: %f" % (k, float(hit_num)/float(len(features))))
     print("-------------------------------------------------------------")
+
+
+if __name__ == '''__main__''':
+
+    tf.logging.set_verbosity(tf.logging.INFO)
+    tf.app.run()

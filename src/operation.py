@@ -243,5 +243,6 @@ def create_position_embedding_tbl(maxlen, embeding_size, name="encoder"):
 def tensor_norm(tensor):
 
     m_tensor = tf.sqrt(x=tf.reduce_sum(input_tensor=tf.square(x=tensor), axis=-1) + 0.00000000001)
+    m_tensor = tf.expand_dims(input=m_tensor, axis=-1)
     norm_tensor = tf.divide(x=tensor, y=m_tensor)
     return norm_tensor

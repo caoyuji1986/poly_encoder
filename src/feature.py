@@ -1,6 +1,8 @@
 import collections
 import os
 import linecache
+import threading
+
 import tensorflow as tf
 
 
@@ -14,7 +16,7 @@ class Example(object):
         Args:
           guid: Unique id for the example.
           x_context: 对话上下文
-          x_response: 对话下一句（数组的第一个元素是正样本，剩下的是负样本）
+          x_response: 对话下一句
         """
         self.guid = guid
         self.x_context = x_context
@@ -33,7 +35,7 @@ class Features(object):
         """Constructs a InputExample.
            Args:
              x_context: 对话上下文
-             x_response: 对话下一句（数组的第一个元素是正样本，剩下的是负样本）
+             x_response: 对话下一句
              is_real_example: 是不是使用实数
         """
         self.x_context = x_context
@@ -83,7 +85,11 @@ class DataProcessor(object):
             x_line = lines[i]
             x_line_items = x_line.split('\t')
             x_context = x_line_items[0]
-            x_response = x_line_items[1:]
+            x_response = x_line_items[1]
+            if int(len(x_line_items)) != 3:
+                continue
+            if int(x_line_items[2]) == 0: # 删除随机采样的负样本，在训练poly-encoder 和 bi-encoder 的时候
+                continue
             examples.append(
                 Example(guid='guid' + str(i), x_context=x_context, x_response=x_response)
             )
@@ -93,14 +99,14 @@ class DataProcessor(object):
 def convert_single_example(ex_index, example, tokenizer):
     """Converts a single `InputExample` into a single `InputFeatures`."""
     x_context = tokenizer.tokenize(text=example.x_context)
-    x_response = [tokenizer.tokenize(text=ele) for ele in example.x_response]
+    x_response = tokenizer.tokenize(text=example.x_response)
     cls_id = tokenizer.vocab['[CLS]']
     sep_id = tokenizer.vocab['[SEP]']
-    x_context_ids = [cls_id] + tokenizer.convert_tokens_to_ids(x_context)[-510:] + [sep_id]
-    x_response_ids = [[cls_id] + tokenizer.convert_tokens_to_ids()[:510] + [sep_id]
-                      for ele in x_response]
+    x_context_ids = [cls_id] + tokenizer.convert_tokens_to_ids(x_context)[-128:] + [sep_id]
+    x_response_ids = [cls_id] + tokenizer.convert_tokens_to_ids(x_response)[:64] + [sep_id]
 
-    if ex_index < 500:
+
+    if ex_index < 5:
         tf.logging.info("*** Example ***")
         tf.logging.info("guid: %s" % (example.guid))
         tf.logging.info("x_context_ids: %s" % " ".join([str(x) for x in x_context_ids]))
@@ -125,11 +131,6 @@ def file_based_convert_examples_to_features(examples, tokenizer, output_file):
             f = tf.train.Feature(int64_list=tf.train.Int64List(value=list(values)))
             return f
 
-        def create_int_list_feature(values):
-            features = list()
-            for ele in values:
-                ele_feature = create_int_feature(values=ele)
-                features.append(ele)
         features = collections.OrderedDict()
         features["x_context"] = create_int_feature(feature.x_context)
         features["x_response"] = create_int_feature(feature.x_response)
@@ -200,3 +201,32 @@ def file_based_input_fn_builder(input_file, is_training,
         return d
 
     return input_fn
+
+
+class FeatureThread(threading.Thread):
+
+    def __init__(self, examples, tokenizer, output_file="./dat/"):
+
+        super().__init__()
+        self.examples = examples
+        self.tokenizer = tokenizer
+        self.output_file = output_file
+
+    def run(self):
+        """线程内容"""
+        file_based_convert_examples_to_features(examples=self.examples,
+                                                tokenizer=self.tokenizer,
+                                                output_file=self.output_file)
+
+    @classmethod
+    def split_task(cls, num_thrd, examples, out_dir, mode):
+        mode_name = "test"
+        if mode == tf.estimator.ModeKeys.TRAIN:
+            mode_name = "train"
+        task_params = list()
+        num_examples = len(examples)
+        for i in range(0, num_examples, int(len(examples) / num_thrd)):
+            ele = [examples[i: i + int(len(examples) / num_thrd)],
+                   os.path.join(out_dir, mode_name + "_" + str(i) + '.tfrecord')]
+            task_params.append(ele)
+        return task_params

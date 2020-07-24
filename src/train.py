@@ -1,11 +1,13 @@
 # coding:utf-8
+import pathlib
+
 import tensorflow as tf
 
 import os
 
 import modeling
 import tokenization
-from feature import file_based_input_fn_builder, DataProcessor, file_based_convert_examples_to_features
+from feature import file_based_input_fn_builder, DataProcessor, file_based_convert_examples_to_features, FeatureThread
 from flag_center import FLAGS
 from model import PolyEncoderConfig, PolyEncoder
 
@@ -29,7 +31,7 @@ def noam_scheme(init_lr, global_step, warmup_steps=4000.):
     return init_lr * warmup_steps ** 0.5 * tf.minimum(step * warmup_steps ** -1.5, step ** -0.5)
 
 
-def create_train_opt_with_clip(loss, lr_init=0.0003):
+def create_train_opt_with_clip(loss, lr_init=0.00005):
     global_steps_ = tf.train.get_or_create_global_step()
     global_step = tf.cast(x=global_steps_, dtype=tf.float32)
     learning_rate = noam_scheme(init_lr=lr_init, global_step=global_step)
@@ -70,16 +72,19 @@ def my_model_fn(features, labels, mode, params):
 
     warmup_steps = min(params['warmup_steps'], params['train_steps'] * 0.1)
     config = params['config']
+    ckpt_dir = params['ckpt_dir']
     x, y = features, labels
 
     poly_encoder = PolyEncoder(config=config, mode=mode)
 
     if mode == tf.estimator.ModeKeys.TRAIN:
+
         context_emb, candidate_emb = poly_encoder.create_model(x_context=x, x_response=y)
-        loss = poly_encoder.calculate_loss_distance(context_emb=context_emb, candidate_emb=candidate_emb)
+        loss = poly_encoder.calculate_loss(context_emb_norm=context_emb, candidate_emb_norm=candidate_emb)
 
         for v in tf.trainable_variables():
             tf.logging.info(v.name)
+        load_weight_from_ckpt(ckpt_dir)
         '''
         训练使用了加梯度裁剪的admw
         '''
@@ -124,6 +129,7 @@ def main(unused_params):
         'train_steps': train_steps,
         'num_epoches': FLAGS.num_epoches,
         'config': model_config,
+        'ckpt_dir': FLAGS.ckpt_dir,
         'train_batch_size': FLAGS.batch_size,
         'predict_batch_size': FLAGS.batch_size
     }
@@ -136,10 +142,39 @@ def main(unused_params):
 
     if FLAGS.do_train:
 
-        tf_path = os.path.join(FLAGS.data_dir, 'train.tfrecord')
+        tf_path = os.path.join(FLAGS.data_dir, 'train.success')
         if not os.path.exists(tf_path):
             examples = data_processor.get_train_examples(data_dir=FLAGS.data_dir)
-            file_based_convert_examples_to_features(examples=examples, tokenizer=tokenizer, output_file=tf_path)
+
+            tasks = FeatureThread.split_task(num_thrd=8,
+                                             examples=examples,
+                                             out_dir=FLAGS.data_dir,
+                                             mode=tf.estimator.ModeKeys.TRAIN)
+            thread_inst_list = list()
+            for task in tasks:
+                thread_inst = FeatureThread(examples=task[0], tokenizer=tokenizer, output_file=task[1])
+                thread_inst.start()
+                thread_inst_list.append(thread_inst)
+            out_file_list = list()
+            for i in range(len(thread_inst_list)):
+                inst = thread_inst_list[1]
+                task = tasks[i]
+                out_file_list.append(task[1])
+                inst.join()
+            pathlib.Path(tf_path).touch()
+            tf_path = ','.join(out_file_list)
+        else:
+            examples = data_processor.get_train_examples(data_dir=FLAGS.data_dir)
+            tasks = FeatureThread.split_task(num_thrd=8,
+                                             examples=examples,
+                                             out_dir=FLAGS.data_dir,
+                                             mode=tf.estimator.ModeKeys.TRAIN)
+            out_file_list = list()
+            for i in range(len(tasks)):
+                task = tasks[i]
+                out_file_list.append(task[1])
+            tf_path = out_file_list
+
         tf.logging.info('开始训练ployencoder')
         train_input_fn = create_input_fn(input_file=tf_path, is_training=True, drop_remainder=False)
         estimator.train(input_fn=train_input_fn, max_steps=train_steps)
