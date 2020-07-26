@@ -1,0 +1,4 @@
+{
+  "bert_config": "./ckpt/bert_mini_H256_L4_uncased_en/bert_config.json",
+  "max_seq_length": 512
+}

@@ -1,9 +1,12 @@
 import collections
+import multiprocessing
 import os
 import linecache
 import threading
 
 import tensorflow as tf
+
+from flag_center import FLAGS
 
 
 class Example(object):
@@ -88,7 +91,7 @@ class DataProcessor(object):
             x_response = x_line_items[1]
             if int(len(x_line_items)) != 3:
                 continue
-            if int(x_line_items[2]) == 0: # 删除随机采样的负样本，在训练poly-encoder 和 bi-encoder 的时候
+            if int(float(x_line_items[2])) == 0: # 删除随机采样的负样本，在训练poly-encoder 和 bi-encoder 的时候
                 continue
             examples.append(
                 Example(guid='guid' + str(i), x_context=x_context, x_response=x_response)
@@ -102,8 +105,8 @@ def convert_single_example(ex_index, example, tokenizer):
     x_response = tokenizer.tokenize(text=example.x_response)
     cls_id = tokenizer.vocab['[CLS]']
     sep_id = tokenizer.vocab['[SEP]']
-    x_context_ids = [cls_id] + tokenizer.convert_tokens_to_ids(x_context)[-128:] + [sep_id]
-    x_response_ids = [cls_id] + tokenizer.convert_tokens_to_ids(x_response)[:64] + [sep_id]
+    x_context_ids = [cls_id] + tokenizer.convert_tokens_to_ids(x_context)[-FLAGS.context_length:] + [sep_id]
+    x_response_ids = [cls_id] + tokenizer.convert_tokens_to_ids(x_response)[:FLAGS.candidate_length] + [sep_id]
 
 
     if ex_index < 5:
@@ -191,6 +194,7 @@ def file_based_input_fn_builder(input_file, is_training,
             padding_values = (
                 (0, 0)
             )
+
             dataset_tmp = dataset_tmp.padded_batch(batch_size=batch_size,
                                                    padded_shapes=padded_shapes,
                                                    padding_values=padding_values,
@@ -203,7 +207,7 @@ def file_based_input_fn_builder(input_file, is_training,
     return input_fn
 
 
-class FeatureThread(threading.Thread):
+class FeatureThread(multiprocessing.Process):
 
     def __init__(self, examples, tokenizer, output_file="./dat/"):
 

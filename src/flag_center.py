@@ -22,5 +22,7 @@ flags.DEFINE_integer(name='num_epoches', default=40, help='epoches 的数量')
 flags.DEFINE_integer(name='batch_size', default=256, help='batch size')
 flags.DEFINE_string(name='vocab_file', default="", help='词表文件')
 
-flags.DEFINE_integer(name='context_length', default=312, help='上下文的最大长度')
+flags.DEFINE_integer(name='context_length', default=128, help='上下文的最大长度')
 flags.DEFINE_integer(name='candidate_length', default=64, help='回复的最大长度')
+
+flags.DEFINE_string(name="model_type", default="bi-encoder", help='模型名称')

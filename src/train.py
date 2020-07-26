@@ -7,9 +7,9 @@ import os
 
 import modeling
 import tokenization
-from feature import file_based_input_fn_builder, DataProcessor, file_based_convert_examples_to_features, FeatureThread
+from feature import file_based_input_fn_builder, DataProcessor, FeatureThread
 from flag_center import FLAGS
-from model import PolyEncoderConfig, PolyEncoder
+from model import PolyEncoderConfig, PolyEncoder, BiEncoder, BiEncoderConfig
 
 
 def create_input_fn(input_file, is_training, drop_remainder):
@@ -73,10 +73,12 @@ def my_model_fn(features, labels, mode, params):
     warmup_steps = min(params['warmup_steps'], params['train_steps'] * 0.1)
     config = params['config']
     ckpt_dir = params['ckpt_dir']
+    model_type = params['model_type']
     x, y = features, labels
-
-    poly_encoder = PolyEncoder(config=config, mode=mode)
-
+    if model_type == 'poly-encoder':
+        poly_encoder = PolyEncoder(config=config, mode=mode)
+    else:
+        poly_encoder = BiEncoder(config=config, mode=mode)
     if mode == tf.estimator.ModeKeys.TRAIN:
 
         context_emb, candidate_emb = poly_encoder.create_model(x_context=x, x_response=y)
@@ -88,7 +90,8 @@ def my_model_fn(features, labels, mode, params):
         '''
         训练使用了加梯度裁剪的admw
         '''
-        train_op, learning_rate = create_train_opt_with_clip(loss=loss)
+        #train_op, learning_rate = create_train_opt_with_clip(loss=loss)
+        train_op, learning_rate = create_train_opt(loss=loss, lr_init=0.00005)
         hook_dict = {
             #'x_context': x,
             #'x_response': y,
@@ -115,6 +118,7 @@ def my_model_fn(features, labels, mode, params):
 
 
 def main(unused_params):
+
     train_steps = FLAGS.num_train_samples * FLAGS.num_epoches / FLAGS.batch_size
     tf.logging.info('train steps is %d' % train_steps)
     tf.logging.info(str(FLAGS.flag_values_dict()))
@@ -122,7 +126,10 @@ def main(unused_params):
     run_config = tf.estimator.RunConfig(model_dir=FLAGS.model_dir,
                                         save_checkpoints_steps=FLAGS.save_checkpoint_steps,
                                         keep_checkpoint_max=FLAGS.keep_checkpoint_max)
-    model_config = PolyEncoderConfig.from_json_file(FLAGS.model_config)
+    if FLAGS.model_type == 'poly-encoder':
+        model_config = PolyEncoderConfig.from_json_file(FLAGS.model_config)
+    else:
+        model_config = BiEncoderConfig.from_json_file(FLAGS.model_config)
     tf.logging.info(model_config.to_json_string())
     params = {
         'warmup_steps': FLAGS.warmup_steps,
@@ -131,7 +138,8 @@ def main(unused_params):
         'config': model_config,
         'ckpt_dir': FLAGS.ckpt_dir,
         'train_batch_size': FLAGS.batch_size,
-        'predict_batch_size': FLAGS.batch_size
+        'predict_batch_size': FLAGS.batch_size,
+        'model_type': FLAGS.model_type
     }
     estimator = tf.estimator.Estimator(model_dir=FLAGS.model_dir,
                                        model_fn=my_model_fn,
@@ -162,7 +170,7 @@ def main(unused_params):
                 out_file_list.append(task[1])
                 inst.join()
             pathlib.Path(tf_path).touch()
-            tf_path = ','.join(out_file_list)
+            tf_path = out_file_list
         else:
             examples = data_processor.get_train_examples(data_dir=FLAGS.data_dir)
             tasks = FeatureThread.split_task(num_thrd=8,
@@ -174,8 +182,9 @@ def main(unused_params):
                 task = tasks[i]
                 out_file_list.append(task[1])
             tf_path = out_file_list
+            tf.logging.info("tfrecord list is %s" % ("\n".join(tf_path)))
 
-        tf.logging.info('开始训练ployencoder')
+        tf.logging.info('开始训练 encoder')
         train_input_fn = create_input_fn(input_file=tf_path, is_training=True, drop_remainder=False)
         estimator.train(input_fn=train_input_fn, max_steps=train_steps)
 
@@ -187,5 +196,6 @@ def main(unused_params):
 
 
 if __name__ == '''__main__''':
+
     tf.logging.set_verbosity(tf.logging.INFO)
     tf.app.run()
